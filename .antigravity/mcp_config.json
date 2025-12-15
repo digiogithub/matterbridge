@@ -1,0 +1,14 @@
+{
+    "mcpServers": {
+        "mycommandmcp-verifactu": {
+            "command": "mycommandmcp",
+            "args": [
+                "--config",
+                "/www/symposium/symposium-verifactu-event-registration-log/.ai/mcp/mycommand-mcp.yaml"
+            ],
+            "disabledTools": [
+                "terminal"
+            ]
+        }
+    }
+}

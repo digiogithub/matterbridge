@@ -517,6 +517,103 @@ ShowTopicChange=false
 ###################################################################
 
 ###################################################################
+# Google Chat section
+# See docs/googlechat-setup.md for setup instructions
+###################################################################
+
+[googlechat]
+
+# You can configure multiple servers "[googlechat.name]" or "[googlechat.name2]"
+# In this example we use [googlechat.work]
+# REQUIRED
+[googlechat.work]
+
+# Path to Google service account credentials JSON file
+# REQUIRED
+# See docs/googlechat-setup.md for how to create this
+CredentialsFile="/etc/matterbridge/google-chat-credentials.json"
+
+# ---------- MESSAGE RECEIVING OPTIONS ----------
+# Choose ONE option: HTTP Webhook OR Pub/Sub
+
+# Option 1: HTTP Webhook (simpler, requires public endpoint)
+# Address to listen on for HTTP webhook requests from Google Chat
+# This endpoint must be publicly accessible via HTTPS
+# OPTIONAL (if using Pub/Sub instead)
+#WebhookBindAddress="0.0.0.0:4242"
+
+# Option 2: Pub/Sub (recommended for production)
+# Google Cloud Project ID
+# OPTIONAL (if using HTTP webhook instead)
+#PubSubProject="your-gcp-project-id"
+
+# Pub/Sub subscription name (must be created first)
+# OPTIONAL (if using HTTP webhook instead)
+#PubSubSubscription="chat-events-sub"
+
+## RELOADABLE SETTINGS
+## Settings below can be reloaded by editing the file
+
+# Whether to prefix messages from other bridges with the sender's nick
+# OPTIONAL (default false)
+PrefixMessagesWithNick=false
+
+# Enable to show user typing notifications from other bridges
+# OPTIONAL (default false)
+ShowUserTyping=false
+
+# Disable sending of edits to other bridges
+# OPTIONAL (default false)
+EditDisable=false
+
+# Message to be appended to every edited message
+# OPTIONAL (default empty)
+EditSuffix=" (edited)"
+
+# Nicks you want to ignore.
+# Regular expressions supported
+# Messages from those users will not be sent to other bridges.
+# OPTIONAL
+IgnoreNicks="botspammer1 botspammer2"
+
+# Messages you want to ignore.
+# Messages matching these regexp will be ignored and not sent to other bridges
+# OPTIONAL
+IgnoreMessages="^~~ badword"
+
+# Messages you want to replace.
+# OPTIONAL (default empty)
+ReplaceMessages=[ ["cat","dog"] ]
+
+# Nicks you want to replace.
+# OPTIONAL (default empty)
+ReplaceNicks=[ ["user--","user"] ]
+
+# Extra label that can be used in the RemoteNickFormat
+# OPTIONAL (default empty)
+Label=""
+
+# RemoteNickFormat defines how remote users appear on this bridge
+# See [general] config section for default options
+RemoteNickFormat="[{PROTOCOL}] <{NICK}> "
+
+# Enable to show users joins/parts from other bridges
+# OPTIONAL (default false)
+ShowJoinPart=false
+
+# Do not send joins/parts to other bridges
+# OPTIONAL (default false)
+NoSendJoinPart=false
+
+# StripNick only allows alphanumerical nicks.
+# OPTIONAL (default false)
+StripNick=false
+
+# Message to show when a message is too big
+# OPTIONAL (default "<clipped message>")
+MessageClipped="<clipped message>"
+
+###################################################################
 #
 # Keybase
 # You should have a separate bridge account on Keybase

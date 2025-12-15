@@ -90,6 +90,7 @@ And more...
 
 - [Discord](https://discordapp.com)
 - [Gitter](https://gitter.im)
+- [Google Chat](https://chat.google.com)
 - [Harmony](https://harmonyapp.io)
 - [IRC](http://www.mirc.com/servers.html)
 - [Keybase](https://keybase.io)

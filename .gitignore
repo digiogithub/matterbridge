@@ -7,3 +7,7 @@ matterbridge.toml
 
 # Exclude IDE Files
 .vscode
+*.db
+*.log
+.agent
+.antigravity
