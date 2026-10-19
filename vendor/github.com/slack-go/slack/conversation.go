@@ -2,10 +2,12 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Conversation is the foundation for IM and BaseGroupConversation
@@ -27,6 +29,7 @@ type Conversation struct {
 	IsPrivate          bool     `json:"is_private"`
 	IsReadOnly         bool     `json:"is_read_only"`
 	IsMpIM             bool     `json:"is_mpim"`
+	IsUserDeleted      bool     `json:"is_user_deleted"`
 	Unlinked           int      `json:"unlinked"`
 	NameNormalized     string   `json:"name_normalized"`
 	NumMembers         int      `json:"num_members"`
@@ -35,9 +38,10 @@ type Conversation struct {
 	ConnectedTeamIDs   []string `json:"connected_team_ids,omitempty"`
 	SharedTeamIDs      []string `json:"shared_team_ids,omitempty"`
 	InternalTeamIDs    []string `json:"internal_team_ids,omitempty"`
-
-	// TODO support pending_shared
-	// TODO support previous_names
+	ContextTeamID      string   `json:"context_team_id,omitempty"`
+	ConversationHostID string   `json:"conversation_host_id,omitempty"`
+	PreviousNames      []string `json:"previous_names,omitempty"`
+	PendingShared      []string `json:"pending_shared,omitempty"`
 }
 
 // GroupConversation is the foundation for Group and Channel
@@ -65,15 +69,37 @@ type Purpose struct {
 	LastSet JSONTime `json:"last_set"`
 }
 
-// Properties contains the Canvas associated to the channel.
+// Properties contains additional fields that appear based on the context of the conversation
 type Properties struct {
-	Canvas Canvas `json:"canvas"`
+	Canvas              Canvas        `json:"canvas"`
+	PostingRestrictedTo RestrictedTo  `json:"posting_restricted_to"`
+	Tabs                []Tab         `json:"tabs"`
+	ThreadsRestrictedTo RestrictedTo  `json:"threads_restricted_to"`
+	RecordChannel       RecordChannel `json:"record_channel"`
+}
+
+type RestrictedTo struct {
+	Type []string `json:"type"`
+	User []string `json:"user"`
+}
+
+type Tab struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Type  string `json:"type"`
 }
 
 type Canvas struct {
 	FileId       string `json:"file_id"`
 	IsEmpty      bool   `json:"is_empty"`
 	QuipThreadId string `json:"quip_thread_id"`
+}
+
+type RecordChannel struct {
+	RecordID          string `json:"record_id"`
+	RecordType        string `json:"record_type"`
+	RecordLabel       string `json:"record_label"`
+	RecordLabelPlural string `json:"record_label_plural"`
 }
 
 type GetUsersInConversationParameters struct {
@@ -328,43 +354,112 @@ func (api *Client) InviteUsersToConversationContext(ctx context.Context, channel
 	return response.Channel, response.Err()
 }
 
-// InviteSharedEmailsToConversation invites users to a shared channels by email.
-// For more details, see InviteSharedEmailsToConversationContext documentation.
-func (api *Client) InviteSharedEmailsToConversation(channelID string, emails ...string) (string, bool, error) {
-	return api.inviteSharedToConversationHelper(context.Background(), channelID, emails, nil)
+/**********************************************************************************
+The following functions are for inviting users to a channel but setting the `force`
+parameter to true. We have added this so that we don't break the existing API.
+
+IMPORTANT: If we ever get here for _another_ parameter, we should consider refactoring
+this to be more flexible.
+*/
+
+// ForceInviteUsersToConversation invites users to a channel but sets the `force`
+// parameter to true.
+//
+// For more details, see ForceInviteUsersToConversationContext documentation.
+func (api *Client) ForceInviteUsersToConversation(channelID string, users ...string) (*Channel, error) {
+	return api.ForceInviteUsersToConversationContext(context.Background(), channelID, users...)
 }
 
-// InviteSharedEmailsToConversationContext invites users to a shared channels by email using context.
-// For more details, see inviteSharedToConversationHelper documentation.
-func (api *Client) InviteSharedEmailsToConversationContext(ctx context.Context, channelID string, emails ...string) (string, bool, error) {
-	return api.inviteSharedToConversationHelper(ctx, channelID, emails, nil)
-}
-
-// InviteSharedUserIDsToConversation invites users to a shared channels by user id.
-// For more details, see InviteSharedUserIDsToConversationContext documentation.
-func (api *Client) InviteSharedUserIDsToConversation(channelID string, userIDs ...string) (string, bool, error) {
-	return api.inviteSharedToConversationHelper(context.Background(), channelID, nil, userIDs)
-}
-
-// InviteSharedUserIDsToConversationContext invites users to a shared channels by user id with context.
-// For more details, see inviteSharedToConversationHelper documentation.
-func (api *Client) InviteSharedUserIDsToConversationContext(ctx context.Context, channelID string, userIDs ...string) (string, bool, error) {
-	return api.inviteSharedToConversationHelper(ctx, channelID, nil, userIDs)
-}
-
-// inviteSharedToConversationHelper invites emails or userIDs to a channel with a custom context.
-// This is a helper function for InviteSharedEmailsToConversation and InviteSharedUserIDsToConversation.
-// It accepts either emails or userIDs, but not both.
-// Slack API docs: https://api.slack.com/methods/conversations.inviteShared
-func (api *Client) inviteSharedToConversationHelper(ctx context.Context, channelID string, emails []string, userIDs []string) (string, bool, error) {
+// ForceInviteUsersToConversationContext invites users to a channel with a custom context
+// while setting the `force` argument to true.
+//
+// Slack API docs: https://api.slack.com/methods/conversations.invite
+func (api *Client) ForceInviteUsersToConversationContext(ctx context.Context, channelID string, users ...string) (*Channel, error) {
 	values := url.Values{
 		"token":   {api.token},
 		"channel": {channelID},
+		"users":   {strings.Join(users, ",")},
+		"force":   {"true"},
 	}
-	if len(emails) > 0 {
-		values.Add("emails", strings.Join(emails, ","))
-	} else if len(userIDs) > 0 {
-		values.Add("user_ids", strings.Join(userIDs, ","))
+	response := struct {
+		SlackResponse
+		Channel *Channel `json:"channel"`
+	}{}
+
+	err := api.postMethod(ctx, "conversations.invite", values, &response)
+	if err != nil {
+		return nil, err
+	}
+
+	return response.Channel, response.Err()
+}
+
+// InviteSharedEmailsToConversation invites users to a shared channels by email.
+// For more details, see InviteSharedToConversationContext documentation.
+func (api *Client) InviteSharedEmailsToConversation(channelID string, emails ...string) (string, bool, error) {
+	return api.InviteSharedToConversationContext(context.Background(), InviteSharedToConversationParams{
+		ChannelID: channelID,
+		Emails:    emails,
+	})
+}
+
+// InviteSharedEmailsToConversationContext invites users to a shared channels by email using context.
+// For more details, see InviteSharedToConversationContext documentation.
+func (api *Client) InviteSharedEmailsToConversationContext(ctx context.Context, channelID string, emails ...string) (string, bool, error) {
+	return api.InviteSharedToConversationContext(ctx, InviteSharedToConversationParams{
+		ChannelID: channelID,
+		Emails:    emails,
+	})
+}
+
+// InviteSharedUserIDsToConversation invites users to a shared channels by user id.
+// For more details, see InviteSharedToConversationContext documentation.
+func (api *Client) InviteSharedUserIDsToConversation(channelID string, userIDs ...string) (string, bool, error) {
+	return api.InviteSharedToConversationContext(context.Background(), InviteSharedToConversationParams{
+		ChannelID: channelID,
+		UserIDs:   userIDs,
+	})
+}
+
+// InviteSharedUserIDsToConversationContext invites users to a shared channels by user id with context.
+// For more details, see InviteSharedToConversationContext documentation.
+func (api *Client) InviteSharedUserIDsToConversationContext(ctx context.Context, channelID string, userIDs ...string) (string, bool, error) {
+	return api.InviteSharedToConversationContext(ctx, InviteSharedToConversationParams{
+		ChannelID: channelID,
+		UserIDs:   userIDs,
+	})
+}
+
+// InviteSharedToConversationParams defines the parameters for the InviteSharedToConversation and InviteSharedToConversationContext functions.
+type InviteSharedToConversationParams struct {
+	ChannelID       string
+	Emails          []string
+	UserIDs         []string
+	ExternalLimited *bool
+}
+
+// InviteSharedToConversation invites emails or userIDs to a channel.
+// For more details, see InviteSharedToConversationContext documentation.
+func (api *Client) InviteSharedToConversation(params InviteSharedToConversationParams) (string, bool, error) {
+	return api.InviteSharedToConversationContext(context.Background(), params)
+}
+
+// InviteSharedToConversationContext invites emails or userIDs to a channel with a custom context.
+// This is a helper function for InviteSharedEmailsToConversation and InviteSharedUserIDsToConversation.
+// It accepts either emails or userIDs, but not both.
+// Slack API docs: https://api.slack.com/methods/conversations.inviteShared
+func (api *Client) InviteSharedToConversationContext(ctx context.Context, params InviteSharedToConversationParams) (string, bool, error) {
+	values := url.Values{
+		"token":   {api.token},
+		"channel": {params.ChannelID},
+	}
+	if len(params.Emails) > 0 {
+		values.Add("emails", strings.Join(params.Emails, ","))
+	} else if len(params.UserIDs) > 0 {
+		values.Add("user_ids", strings.Join(params.UserIDs, ","))
+	}
+	if params.ExternalLimited != nil {
+		values.Add("external_limited", strconv.FormatBool(*params.ExternalLimited))
 	}
 	response := struct {
 		SlackResponse
@@ -395,7 +490,7 @@ func (api *Client) KickUserFromConversationContext(ctx context.Context, channelI
 		"user":    {user},
 	}
 
-	response := SlackResponse{}
+	response := KickUserFromConversationSlackResponse{}
 	err := api.postMethod(ctx, "conversations.kick", values, &response)
 	if err != nil {
 		return err
@@ -594,6 +689,150 @@ type GetConversationsParameters struct {
 	TeamID          string
 }
 
+// GetConversationsOption options for the GetAllConversationsContext method call.
+type GetConversationsOption func(*ConversationPagination)
+
+// GetConversationsOptionLimit limit the number of conversations returned
+func GetConversationsOptionLimit(n int) GetConversationsOption {
+	return func(p *ConversationPagination) {
+		p.limit = n
+	}
+}
+
+// GetConversationsOptionExcludeArchived exclude archived conversations
+func GetConversationsOptionExcludeArchived(exclude bool) GetConversationsOption {
+	return func(p *ConversationPagination) {
+		p.excludeArchived = exclude
+	}
+}
+
+// GetConversationsOptionTypes filter conversations by type
+func GetConversationsOptionTypes(types []string) GetConversationsOption {
+	return func(p *ConversationPagination) {
+		p.types = types
+	}
+}
+
+// GetConversationsOptionTeamID include team Id
+func GetConversationsOptionTeamID(teamId string) GetConversationsOption {
+	return func(p *ConversationPagination) {
+		p.teamId = teamId
+	}
+}
+
+func newConversationPagination(c *Client, options ...GetConversationsOption) (cp ConversationPagination) {
+	cp = ConversationPagination{
+		c:     c,
+		limit: 200, // per slack api documentation.
+	}
+
+	for _, opt := range options {
+		opt(&cp)
+	}
+
+	return cp
+}
+
+// ConversationPagination allows for paginating over the conversations
+type ConversationPagination struct {
+	Conversations   []Channel
+	limit           int
+	excludeArchived bool
+	types           []string
+	teamId          string
+	previousResp    *ResponseMetadata
+	c               *Client
+}
+
+// Done checks if the pagination has completed
+func (ConversationPagination) Done(err error) bool {
+	return errors.Is(err, errPaginationComplete)
+}
+
+// Failure checks if pagination failed.
+func (t ConversationPagination) Failure(err error) error {
+	if t.Done(err) {
+		return nil
+	}
+
+	return err
+}
+
+func (t ConversationPagination) Next(ctx context.Context) (_ ConversationPagination, err error) {
+	if t.c == nil || (t.previousResp != nil && t.previousResp.Cursor == "") {
+		return t, errPaginationComplete
+	}
+
+	t.previousResp = t.previousResp.initialize()
+
+	values := url.Values{
+		"token":  {t.c.token},
+		"limit":  {strconv.Itoa(t.limit)},
+		"cursor": {t.previousResp.Cursor},
+	}
+	if t.excludeArchived {
+		values.Add("exclude_archived", strconv.FormatBool(t.excludeArchived))
+	}
+	if t.types != nil {
+		values.Add("types", strings.Join(t.types, ","))
+	}
+	if t.teamId != "" {
+		values.Add("team_id", t.teamId)
+	}
+
+	response := struct {
+		Channels         []Channel        `json:"channels"`
+		ResponseMetaData responseMetaData `json:"response_metadata"`
+		SlackResponse
+	}{}
+
+	err = t.c.postMethod(ctx, "conversations.list", values, &response)
+	if err != nil {
+		return t, err
+	}
+
+	if err := response.Err(); err != nil {
+		return t, err
+	}
+
+	t.c.Debugf("GetAllConversationsContext: got %d conversations; cursor %s", len(response.Channels), response.ResponseMetaData.NextCursor)
+	t.Conversations = response.Channels
+	t.previousResp = &ResponseMetadata{Cursor: response.ResponseMetaData.NextCursor}
+
+	return t, nil
+}
+
+// GetConversationsPaginated fetches conversations in a paginated fashion, see GetAllConversationsContext for usage.
+func (api *Client) GetConversationsPaginated(options ...GetConversationsOption) ConversationPagination {
+	return newConversationPagination(api, options...)
+}
+
+// GetAllConversations returns the list of all conversations, handling pagination and rate limiting
+func (api *Client) GetAllConversations(options ...GetConversationsOption) (results []Channel, err error) {
+	return api.GetAllConversationsContext(context.Background(), options...)
+}
+
+// GetAllConversationsContext returns the list of all conversations with a custom context, handling pagination and rate limiting
+func (api *Client) GetAllConversationsContext(ctx context.Context, options ...GetConversationsOption) (results []Channel, err error) {
+	results = []Channel{}
+	p := api.GetConversationsPaginated(options...)
+	for err == nil {
+		p, err = p.Next(ctx)
+		if err == nil {
+			results = append(results, p.Conversations...)
+		} else if rateLimitedError, ok := err.(*RateLimitedError); ok {
+			select {
+			case <-ctx.Done():
+				err = ctx.Err()
+			case <-time.After(rateLimitedError.RetryAfter):
+				err = nil
+			}
+		}
+	}
+
+	return results, p.Failure(err)
+}
+
 // GetConversations returns the list of channels in a Slack team.
 // For more details, see GetConversationsContext documentation.
 func (api *Client) GetConversations(params *GetConversationsParameters) (channels []Channel, nextCursor string, err error) {
@@ -730,13 +969,13 @@ type GetConversationHistoryResponse struct {
 	Messages []Message `json:"messages"`
 }
 
-// GetConversationHistory joins an existing conversation.
+// GetConversationHistory retrieves the message history from the specified conversation.
 // For more details, see GetConversationHistoryContext documentation.
 func (api *Client) GetConversationHistory(params *GetConversationHistoryParameters) (*GetConversationHistoryResponse, error) {
 	return api.GetConversationHistoryContext(context.Background(), params)
 }
 
-// GetConversationHistoryContext joins an existing conversation with a custom context.
+// GetConversationHistoryContext retrieves the message history from the specified conversation with a custom context.
 // Slack API docs: https://api.slack.com/methods/conversations.history
 func (api *Client) GetConversationHistoryContext(ctx context.Context, params *GetConversationHistoryParameters) (*GetConversationHistoryResponse, error) {
 	values := url.Values{"token": {api.token}, "channel": {params.ChannelID}}
@@ -795,4 +1034,71 @@ func (api *Client) MarkConversationContext(ctx context.Context, channel, ts stri
 		return err
 	}
 	return response.Err()
+}
+
+// createChannelCanvasParams contains arguments for CreateChannelCanvas method call.
+type createChannelCanvasParams struct {
+	title           string
+	documentContent *DocumentContent
+}
+
+// CreateChannelCanvasOption options for the CreateChannelCanvas method call.
+type CreateChannelCanvasOption func(*createChannelCanvasParams)
+
+// CreateChannelCanvasOptionTitle sets the title of the canvas.
+func CreateChannelCanvasOptionTitle(title string) CreateChannelCanvasOption {
+	return func(params *createChannelCanvasParams) {
+		params.title = title
+	}
+}
+
+// CreateChannelCanvasOptionDocumentContent sets the document content of the canvas.
+func CreateChannelCanvasOptionDocumentContent(documentContent DocumentContent) CreateChannelCanvasOption {
+	return func(params *createChannelCanvasParams) {
+		params.documentContent = &documentContent
+	}
+}
+
+// CreateChannelCanvas creates a new canvas in a channel.
+// For more details, see CreateChannelCanvasContext documentation.
+func (api *Client) CreateChannelCanvas(channel string, documentContent DocumentContent, options ...CreateChannelCanvasOption) (string, error) {
+	return api.CreateChannelCanvasContext(context.Background(), channel, documentContent, options...)
+}
+
+// CreateChannelCanvasContext creates a new canvas in a channel with a custom context.
+// Slack API docs: https://api.slack.com/methods/conversations.canvases.create
+func (api *Client) CreateChannelCanvasContext(ctx context.Context, channel string, documentContent DocumentContent, options ...CreateChannelCanvasOption) (string, error) {
+	params := createChannelCanvasParams{
+		documentContent: &documentContent,
+	}
+
+	for _, opt := range options {
+		opt(&params)
+	}
+
+	values := url.Values{
+		"token":      {api.token},
+		"channel_id": {channel},
+	}
+	if params.title != "" {
+		values.Add("title", params.title)
+	}
+	if params.documentContent != nil && params.documentContent.Type != "" {
+		documentContentJSON, err := json.Marshal(params.documentContent)
+		if err != nil {
+			return "", err
+		}
+		values.Add("document_content", string(documentContentJSON))
+	}
+
+	response := struct {
+		SlackResponse
+		CanvasID string `json:"canvas_id"`
+	}{}
+	err := api.postMethod(ctx, "conversations.canvases.create", values, &response)
+	if err != nil {
+		return "", err
+	}
+
+	return response.CanvasID, response.Err()
 }
